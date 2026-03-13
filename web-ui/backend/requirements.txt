@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-multipart
+websockets
+pydantic
+pydantic-settings
+psutil
+py-cpuinfo
