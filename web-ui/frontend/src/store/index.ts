@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { SystemSpecs, ModelFit, FilterOptions, FitLevel } from '@/lib/api'
+import type { SystemSpecs, ModelFit, FilterOptions } from '@/lib/api'
 
 interface AppState {
   theme: 'light' | 'dark' | 'system'

@@ -14,9 +14,7 @@ export function HomePage() {
     models, 
     setModels,
     filters,
-    providers,
     setProviders,
-    useCases,
     setUseCases,
   } = useAppStore()
 
