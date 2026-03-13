@@ -3,3 +3,10 @@ llmfit
 /docs
 llmfit-desktop/gen/schemas/*
 data/gguf_sources_cache.json
+
+# Trae IDE files
+.trae/
+
+# Web UI dependencies and build
+web-ui/frontend/node_modules/
+web-ui/backend/__pycache__/
