@@ -15,6 +15,7 @@ struct GpuInfoJs {
     backend: String,
     count: u32,
     unified_memory: bool,
+    gpu_type: String,
 }
 
 #[derive(Serialize)]
@@ -71,6 +72,7 @@ fn get_system_specs() -> Result<SystemInfo, String> {
             backend: format!("{:?}", g.backend),
             count: g.count,
             unified_memory: g.unified_memory,
+            gpu_type: format!("{:?}", g.gpu_type),
         })
         .collect();
     Ok(SystemInfo {
@@ -123,6 +125,7 @@ fn get_model_fits() -> Result<Vec<ModelFitInfo>, String> {
             runtime: match f.runtime {
                 InferenceRuntime::LlamaCpp => "llama.cpp".to_string(),
                 InferenceRuntime::Mlx => "MLX".to_string(),
+                InferenceRuntime::Vllm => "vLLM".to_string(),
             },
             installed: f.installed,
             notes: f.notes.clone(),

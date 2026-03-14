@@ -3,10 +3,13 @@ name = "llmfit-desktop"
 version.workspace = true
 edition = "2024"
 authors = ["axjns"]
-description = "macOS desktop application for llmfit — visual LLM hardware fitting"
+description = "LLMFit Desktop Application — LLM Hardware Fitting"
 license = "MIT"
 repository = "https://github.com/AlexsJones/llmfit"
 default-run = "llmfit-desktop"
+
+[package.metadata]
+# Required for tauri-build
 
 [[bin]]
 name = "llmfit-desktop"

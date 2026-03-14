@@ -1,6 +1,12 @@
 use std::collections::BTreeMap;
 use sysinfo::System;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// The acceleration backend for inference speed estimation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum GpuBackend {
@@ -29,6 +35,24 @@ impl GpuBackend {
     }
 }
 
+/// Type of GPU - integrated (shares system RAM) or discrete (dedicated VRAM)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum GpuType {
+    Integrated,
+    Discrete,
+    Unknown,
+}
+
+impl GpuType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            GpuType::Integrated => "Integrated",
+            GpuType::Discrete => "Discrete",
+            GpuType::Unknown => "",
+        }
+    }
+}
+
 /// Information about a single detected GPU.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GpuInfo {
@@ -37,6 +61,7 @@ pub struct GpuInfo {
     pub backend: GpuBackend,
     pub count: u32, // >1 for same-model multi-GPU (e.g. 2x RTX 4090)
     pub unified_memory: bool,
+    pub gpu_type: GpuType,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -121,7 +146,7 @@ impl SystemSpecs {
     fn detect_all_gpus(total_ram_gb: f64, cpu_name: &str) -> Vec<GpuInfo> {
         let mut gpus = Vec::new();
 
-        // NVIDIA GPUs via nvidia-smi, with sysfs fallback for Linux/toolbox setups
+        // 1. NVIDIA GPUs via nvidia-smi (primary method)
         let nvidia = Self::detect_nvidia_gpus();
         if nvidia.is_empty() {
             if let Some(nvidia_sysfs) = Self::detect_nvidia_gpu_sysfs_info() {
@@ -131,83 +156,36 @@ impl SystemSpecs {
             gpus.extend(nvidia);
         }
 
-        // AMD GPUs via rocm-smi or sysfs
+        // 2. AMD GPUs via rocm-smi (Linux only, for compute-capable AMD GPUs)
         if let Some(amd) = Self::detect_amd_gpu_rocm_info() {
-            gpus.push(amd);
-        } else if let Some(amd) = Self::detect_amd_gpu_sysfs_info() {
-            gpus.push(amd);
-        }
-
-        // Windows WMI (catches GPUs not found by vendor-specific tools)
-        for wmi_gpu in Self::detect_gpu_windows_info() {
-            // Skip if we already found a GPU with the same name from a vendor tool
-            let dominated = gpus.iter().any(|existing| {
-                let existing_lower = existing.name.to_lowercase();
-                let wmi_lower = wmi_gpu.name.to_lowercase();
-                existing_lower.contains(&wmi_lower) || wmi_lower.contains(&existing_lower)
+            // Only add if not already detected via other methods
+            let already_found = gpus.iter().any(|g| {
+                g.name.to_lowercase().contains("amd") || g.name.to_lowercase().contains("radeon")
             });
-            if !dominated {
-                gpus.push(wmi_gpu);
-            }
-        }
-
-        // AMD unified memory APUs (e.g. Ryzen AI MAX series).
-        // These share the full system RAM between CPU and GPU, like Apple Silicon.
-        // WMI AdapterRAM is a 32-bit field capped at ~4 GB, so we override with
-        // total system RAM for these APUs.
-        if is_amd_unified_memory_apu(cpu_name) {
-            let amd_idx = gpus.iter().position(|g| {
-                let lower = g.name.to_lowercase();
-                lower.contains("amd") || lower.contains("radeon")
-            });
-            if let Some(idx) = amd_idx {
-                gpus[idx].unified_memory = true;
-                gpus[idx].vram_gb = Some(total_ram_gb);
-            } else {
-                // No AMD GPU found via other methods; create one.
-                gpus.push(GpuInfo {
-                    name: format!("{} (integrated)", cpu_name),
-                    vram_gb: Some(total_ram_gb),
-                    backend: GpuBackend::Vulkan,
-                    count: 1,
-                    unified_memory: true,
-                });
-            }
-        }
-
-        // NVIDIA Grace / DGX Spark unified memory SoCs (e.g. GB10, GB20).
-        // These share the full system RAM between CPU and GPU, like Apple Silicon.
-        // nvidia-smi may report 0 VRAM or a small dedicated portion, so we
-        // override with total system RAM and flag as unified memory.
-        let is_nvidia_unified = gpus.iter().any(|g| {
-            let lower = g.name.to_lowercase();
-            lower.contains("gb10") || lower.contains("gb20")
-        });
-        if is_nvidia_unified {
-            for gpu in &mut gpus {
-                let lower = gpu.name.to_lowercase();
-                if lower.contains("gb10") || lower.contains("gb20") {
-                    gpu.unified_memory = true;
-                    gpu.vram_gb = Some(total_ram_gb);
-                }
-            }
-        }
-
-        // Intel Arc via sysfs
-        if let Some(vram) = Self::detect_intel_gpu() {
-            let already_found = gpus.iter().any(|g| g.name.to_lowercase().contains("intel"));
             if !already_found {
-                gpus.push(GpuInfo {
-                    name: "Intel Arc".to_string(),
-                    vram_gb: Some(vram),
-                    backend: GpuBackend::Sycl,
-                    count: 1,
-                    unified_memory: false,
-                });
+                gpus.push(amd);
             }
         }
 
-        // Apple Silicon (unified memory)
+        // 3. Windows WMI - detect all GPUs but filter intelligently
+        for wmi_gpu in Self::detect_gpu_windows_info() {
+            // Skip if we already found this GPU via vendor-specific tools
+            let already_found = gpus.iter().any(|existing| {
+                Self::is_same_gpu_name(&existing.name, &wmi_gpu.name)
+            });
+            if already_found {
+                continue;
+            }
+
+            // Filter out GPUs that are not useful for LLM inference
+            if Self::should_filter_gpu(&wmi_gpu) {
+                continue;
+            }
+
+            gpus.push(wmi_gpu);
+        }
+
+        // 4. Apple Silicon (unified memory) - only for macOS
         if let Some(vram) = Self::detect_apple_gpu(total_ram_gb) {
             let name = if cpu_name.to_lowercase().contains("apple") {
                 cpu_name.to_string()
@@ -220,23 +198,8 @@ impl SystemSpecs {
                 backend: GpuBackend::Metal,
                 count: 1,
                 unified_memory: true,
+                gpu_type: GpuType::Integrated, // Apple Silicon is integrated
             });
-        }
-
-        // Ascend NPUs via npu-smi
-        let ascend = Self::detect_ascend_npus();
-        if !ascend.is_empty() {
-            gpus.extend(ascend);
-        }
-
-        // Vulkan fallback (e.g. Android/Termux with Turnip)
-        for vulkan_gpu in Self::detect_vulkan_gpu_info() {
-            let dominated = gpus
-                .iter()
-                .any(|existing| Self::is_same_gpu_name(&existing.name, &vulkan_gpu.name));
-            if !dominated {
-                gpus.push(vulkan_gpu);
-            }
         }
 
         // Sort by VRAM descending so the best GPU is primary
@@ -247,6 +210,74 @@ impl SystemSpecs {
         });
 
         gpus
+    }
+
+    /// Determine if a GPU should be filtered out (not useful for LLM inference)
+    fn should_filter_gpu(gpu: &GpuInfo) -> bool {
+        let name_lower = gpu.name.to_lowercase();
+        
+        // Filter 1: Very old GPUs (pre-2015) that are useless for LLM inference
+        // HD series (2000-8000) are from 2007-2015, too old
+        if name_lower.contains("hd ") || name_lower.contains("radeon hd") {
+            // Check if it's HD 2000-8000 series (not RX series)
+            if name_lower.contains("hd 2") || name_lower.contains("hd 3") || 
+               name_lower.contains("hd 4") || name_lower.contains("hd 5") ||
+               name_lower.contains("hd 6") || name_lower.contains("hd 7") ||
+               name_lower.contains("hd 8") {
+                return true;
+            }
+        }
+        
+        // Filter 2: Very low VRAM (< 2GB) - not useful for LLM
+        if let Some(vram) = gpu.vram_gb {
+            if vram < 2.0 {
+                return true;
+            }
+        }
+        
+        // Filter 3: Virtual/display-only adapters
+        if name_lower.contains("basic") || 
+           name_lower.contains("microsoft") ||
+           name_lower.contains("virtual") ||
+           name_lower.contains("basic display") {
+            return true;
+        }
+        
+        false
+    }
+
+    /// Detect GPU type (integrated vs discrete) based on name and properties
+    fn detect_gpu_type(name: &str, _vram_gb: Option<f64>) -> GpuType {
+        let name_lower = name.to_lowercase();
+        
+        // Integrated GPU indicators
+        if name_lower.contains("integrated") ||
+           name_lower.contains("intel hd") ||
+           name_lower.contains("intel uhd") ||
+           name_lower.contains("intel iris") ||
+           name_lower.contains("radeon graphics") || // AMD integrated
+           name_lower.contains("amd radeon graphics") ||
+           name_lower.contains("vega ") || // AMD integrated
+           name_lower.contains("ryzen") && name_lower.contains("graphics") {
+            return GpuType::Integrated;
+        }
+        
+        // Discrete GPU indicators
+        if name_lower.contains("geforce") ||
+           name_lower.contains("rtx") ||
+           name_lower.contains("gtx") ||
+           name_lower.contains("quadro") ||
+           name_lower.contains("tesla") ||
+           name_lower.contains("radeon rx") ||
+           name_lower.contains("radeon pro") ||
+           name_lower.contains("arc ") || // Intel Arc
+           name_lower.contains("instinct") { // AMD MI series
+            return GpuType::Discrete;
+        }
+        
+        // Default: try to infer from VRAM
+        // Integrated GPUs typically have small VRAM or share system memory
+        GpuType::Unknown
     }
 
     /// Detect NVIDIA GPUs via nvidia-smi. Returns one GpuInfo per unique model,
@@ -356,7 +387,7 @@ impl SystemSpecs {
         grouped
             .into_iter()
             .map(|(name, (count, per_card_vram_mb, is_unified))| GpuInfo {
-                name,
+                name: name.clone(),
                 vram_gb: if per_card_vram_mb > 0.0 {
                     Some(per_card_vram_mb / 1024.0)
                 } else {
@@ -365,6 +396,7 @@ impl SystemSpecs {
                 backend: GpuBackend::Cuda,
                 count,
                 unified_memory: is_unified,
+                gpu_type: Self::detect_gpu_type(&name, if per_card_vram_mb > 0.0 { Some(per_card_vram_mb / 1024.0) } else { None }),
             })
             .collect()
     }
@@ -412,7 +444,7 @@ impl SystemSpecs {
         grouped
             .into_iter()
             .map(|(name, (count, per_card_vram_mb))| GpuInfo {
-                name,
+                name: name.clone(),
                 vram_gb: if per_card_vram_mb > 0.0 {
                     Some(per_card_vram_mb / 1024.0)
                 } else {
@@ -421,6 +453,7 @@ impl SystemSpecs {
                 backend: GpuBackend::Cuda,
                 count,
                 unified_memory: false,
+                gpu_type: Self::detect_gpu_type(&name, if per_card_vram_mb > 0.0 { Some(per_card_vram_mb / 1024.0) } else { None }),
             })
             .collect()
     }
@@ -500,11 +533,12 @@ impl SystemSpecs {
         }
 
         Some(GpuInfo {
-            name,
+            name: name.clone(),
             vram_gb,
             backend,
             count: gpu_count,
             unified_memory: false,
+            gpu_type: Self::detect_gpu_type(&name, vram_gb),
         })
     }
 
@@ -589,11 +623,12 @@ impl SystemSpecs {
         };
 
         Some(GpuInfo {
-            name,
+            name: name.clone(),
             vram_gb,
             backend: GpuBackend::Rocm,
             count: gpu_count,
             unified_memory: false,
+            gpu_type: Self::detect_gpu_type(&name, vram_gb),
         })
     }
 
@@ -657,11 +692,12 @@ impl SystemSpecs {
 
             // AMD GPU without ROCm — Vulkan is the most likely inference backend
             return Some(GpuInfo {
-                name,
+                name: name.clone(),
                 vram_gb,
                 backend: GpuBackend::Vulkan,
                 count: 1,
                 unified_memory: false,
+                gpu_type: Self::detect_gpu_type(&name, vram_gb),
             });
         }
         None
@@ -790,39 +826,48 @@ impl SystemSpecs {
 
     /// Detect GPUs on Windows via WMI (Win32_VideoController).
     /// Returns all discrete GPUs found (AMD, NVIDIA, Intel, etc.).
+    #[cfg(target_os = "windows")]
     fn detect_gpu_windows_info() -> Vec<GpuInfo> {
-        if !cfg!(target_os = "windows") {
-            return Vec::new();
-        }
-
         // Use PowerShell to query WMI — more reliable than wmic (deprecated)
-        if let Ok(output) = std::process::Command::new("powershell")
-            .arg("-NoProfile")
+        // Use CREATE_NO_WINDOW to hide the PowerShell console window
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.arg("-NoProfile")
             .arg("-Command")
             .arg("Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ForEach-Object { $_.Name + '|' + $_.AdapterRAM }")
-            .output()
-            && output.status.success()
-                && let Ok(text) = String::from_utf8(output.stdout) {
+            .creation_flags(CREATE_NO_WINDOW);
+        
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
                     let gpus = Self::parse_windows_gpu_list(&text);
                     if !gpus.is_empty() {
                         return gpus;
                     }
                 }
+            }
+        }
 
         // Fallback to wmic for older Windows
         Self::detect_gpu_windows_wmic_list()
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn detect_gpu_windows_info() -> Vec<GpuInfo> {
+        Vec::new()
+    }
+
     /// Fallback Windows GPU detection via wmic (works on older systems).
+    #[cfg(target_os = "windows")]
     fn detect_gpu_windows_wmic_list() -> Vec<GpuInfo> {
-        let output = match std::process::Command::new("wmic")
-            .arg("path")
+        let mut cmd = std::process::Command::new("wmic");
+        cmd.arg("path")
             .arg("win32_VideoController")
             .arg("get")
             .arg("Name,AdapterRAM")
             .arg("/format:csv")
-            .output()
-        {
+            .creation_flags(CREATE_NO_WINDOW);
+        
+        let output = match cmd.output() {
             Ok(o) if o.status.success() => o,
             _ => return Vec::new(),
         };
@@ -852,16 +897,23 @@ impl SystemSpecs {
                 }
                 let backend = Self::infer_gpu_backend(&name);
                 let vram_gb = Self::resolve_wmi_vram(raw_vram, &name);
+                let gpu_type = Self::detect_gpu_type(&name, vram_gb);
                 gpus.push(GpuInfo {
                     name,
                     vram_gb,
                     backend,
                     count: 1,
                     unified_memory: false,
+                    gpu_type,
                 });
             }
         }
         gpus
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn detect_gpu_windows_wmic_list() -> Vec<GpuInfo> {
+        Vec::new()
     }
 
     /// Parse all GPU entries from PowerShell output (Name|AdapterRAM per line).
@@ -890,12 +942,14 @@ impl SystemSpecs {
 
             let backend = Self::infer_gpu_backend(&name);
             let vram_gb = Self::resolve_wmi_vram(raw_vram, &name);
+            let gpu_type = Self::detect_gpu_type(&name, vram_gb);
             gpus.push(GpuInfo {
                 name,
                 vram_gb,
                 backend,
                 count: 1,
                 unified_memory: false,
+                gpu_type,
             });
         }
         gpus
@@ -1083,11 +1137,12 @@ impl SystemSpecs {
         grouped
             .into_iter()
             .map(|(name, count)| GpuInfo {
+                name: name.clone(),
                 backend: GpuBackend::Vulkan,
                 count,
-                name,
                 unified_memory: false,
                 vram_gb: None,
+                gpu_type: Self::detect_gpu_type(&name, None),
             })
             .collect()
     }
@@ -1210,6 +1265,7 @@ impl SystemSpecs {
                     backend: GpuBackend::Ascend,
                     count: 1,
                     unified_memory: false,
+                    gpu_type: GpuType::Discrete,
                 };
                 npu_infos.push(npu_info);
             }
@@ -1391,6 +1447,7 @@ impl SystemSpecs {
                 backend,
                 count: 1,
                 unified_memory: false,
+                gpu_type: GpuType::Unknown,
             });
             self.has_gpu = true;
             self.gpu_vram_gb = Some(vram_gb);

@@ -6,6 +6,152 @@ let allFits = [];
 let ollamaAvailable = false;
 let pullInterval = null;
 
+// Internationalization
+const i18n = {
+  en: {
+    system: 'System',
+    cpu: 'CPU',
+    detecting: 'Detecting...',
+    total_ram: 'Total RAM',
+    available_ram: 'Available RAM',
+    memory: 'Memory',
+    gpu: 'GPU',
+    no_gpu_detected: 'No GPU detected',
+    model_compatibility: 'Model Compatibility',
+    filter_models: 'Filter models...',
+    all_fit_levels: 'All Fit Levels',
+    perfect: 'Perfect',
+    good: 'Good',
+    marginal: 'Marginal',
+    too_tight: 'Too Tight',
+    model: 'Model',
+    params: 'Params',
+    quant: 'Quant',
+    fit: 'Fit',
+    mode: 'Mode',
+    score: 'Score',
+    ram_req: 'RAM Req',
+    est_tps: 'Est. TPS',
+    use_case: 'Use Case',
+    loading_models: 'Loading models...',
+    no_models_found: 'No models found',
+    error_loading_models: 'Error loading models',
+    cores: 'cores',
+    gb_vram: 'GB VRAM',
+    shared_memory: 'Shared memory',
+    integrated: 'Integrated',
+    discrete: 'Discrete',
+    unified_memory: 'Unified (CPU + GPU shared)',
+    parameters: 'Parameters',
+    quantization: 'Quantization',
+    runtime: 'Runtime',
+    est_speed: 'Est. Speed',
+    tok_per_sec: 'tok/s',
+    fit_analysis: 'Fit Analysis',
+    memory_usage: 'Memory',
+    notes: 'Notes',
+    installed: 'Installed',
+    not_installed: 'Not Installed',
+    download_via_ollama: '⬇ Download via Ollama',
+    close: 'Close',
+    starting_download: 'Starting download...',
+    download_complete: 'Download complete!',
+    error: 'Error',
+    error_loading_specs: 'Error loading specs'
+  },
+  zh: {
+    system: '系统',
+    cpu: '处理器',
+    detecting: '检测中...',
+    total_ram: '总内存',
+    available_ram: '可用内存',
+    memory: '内存',
+    gpu: '显卡',
+    no_gpu_detected: '未检测到显卡',
+    model_compatibility: '模型适配分析',
+    filter_models: '搜索模型...',
+    all_fit_levels: '所有适配级别',
+    perfect: '完美',
+    good: '良好',
+    marginal: '勉强',
+    too_tight: '太紧张',
+    model: '模型',
+    params: '参数量',
+    quant: '量化',
+    fit: '适配度',
+    mode: '运行模式',
+    score: '分数',
+    ram_req: '内存需求',
+    est_tps: '预估TPS',
+    use_case: '使用场景',
+    loading_models: '加载模型中...',
+    no_models_found: '未找到模型',
+    error_loading_models: '加载模型出错',
+    cores: '核',
+    gb_vram: 'GB 显存',
+    shared_memory: '共享内存',
+    integrated: '集成显卡',
+    discrete: '独立显卡',
+    unified_memory: '统一内存 (CPU + GPU 共享)',
+    parameters: '参数量',
+    quantization: '量化级别',
+    runtime: '运行时',
+    est_speed: '预估速度',
+    tok_per_sec: '词元/秒',
+    fit_analysis: '适配分析',
+    memory_usage: '内存使用',
+    notes: '备注',
+    installed: '已安装',
+    not_installed: '未安装',
+    download_via_ollama: '⬇ 通过 Ollama 下载',
+    close: '关闭',
+    starting_download: '开始下载...',
+    download_complete: '下载完成!',
+    error: '错误',
+    error_loading_specs: '加载系统信息出错'
+  }
+};
+
+let currentLang = localStorage.getItem('llmfit-lang') || 'en';
+
+function t(key) {
+  return i18n[currentLang][key] || key;
+}
+
+function updateLanguage() {
+  // Update all elements with data-i18n attribute
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (i18n[currentLang][key]) {
+      el.textContent = i18n[currentLang][key];
+    }
+  });
+  
+  // Update all elements with data-i18n-placeholder attribute
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    const key = el.getAttribute('data-i18n-placeholder');
+    if (i18n[currentLang][key]) {
+      el.placeholder = i18n[currentLang][key];
+    }
+  });
+  
+  // Update language toggle button
+  const langToggle = document.getElementById('lang-toggle');
+  if (langToggle) {
+    langToggle.textContent = currentLang === 'en' ? '中文' : 'English';
+  }
+  
+  // Refresh dynamic content
+  loadSpecs();
+  renderModels(allFits);
+}
+
+function toggleLanguage() {
+  currentLang = currentLang === 'en' ? 'zh' : 'en';
+  localStorage.setItem('llmfit-lang', currentLang);
+  updateLanguage();
+}
+
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
@@ -18,7 +164,7 @@ async function loadSpecs() {
     if (!specs) return;
 
     document.getElementById('cpu-name').textContent = specs.cpu_name;
-    document.getElementById('cpu-cores').textContent = specs.cpu_cores + ' cores';
+    document.getElementById('cpu-cores').textContent = specs.cpu_cores + ' ' + t('cores');
     document.getElementById('ram-total').textContent = specs.total_ram_gb.toFixed(1) + ' GB';
     document.getElementById('ram-available').textContent = specs.available_ram_gb.toFixed(1) + ' GB';
 
@@ -28,18 +174,22 @@ async function loadSpecs() {
     if (specs.gpus.length === 0) {
       const card = document.createElement('div');
       card.className = 'spec-card';
-      card.innerHTML = '<span class="spec-label">GPU</span>' +
-        '<span class="spec-value">No GPU detected</span>';
+      card.innerHTML = '<span class="spec-label">' + t('gpu') + '</span>' +
+        '<span class="spec-value">' + t('no_gpu_detected') + '</span>';
       container.appendChild(card);
     } else {
       specs.gpus.forEach((gpu, i) => {
         const card = document.createElement('div');
         card.className = 'spec-card';
-        const label = specs.gpus.length > 1 ? 'GPU ' + (i + 1) : 'GPU';
+        const label = specs.gpus.length > 1 ? t('gpu') + ' ' + (i + 1) : t('gpu');
         const countStr = gpu.count > 1 ? ' ×' + gpu.count : '';
-        const vramStr = gpu.vram_gb != null ? gpu.vram_gb.toFixed(1) + ' GB VRAM' : 'Shared memory';
+        const vramStr = gpu.vram_gb != null ? gpu.vram_gb.toFixed(1) + ' ' + t('gb_vram') : t('shared_memory');
         const backendStr = gpu.backend !== 'None' ? gpu.backend : '';
-        const details = [vramStr, backendStr].filter(Boolean).join(' · ');
+        // Add GPU type indicator (Integrated/Discrete)
+        let gpuTypeStr = '';
+        if (gpu.gpu_type === 'Integrated') gpuTypeStr = t('integrated');
+        else if (gpu.gpu_type === 'Discrete') gpuTypeStr = t('discrete');
+        const details = [vramStr, gpuTypeStr, backendStr].filter(Boolean).join(' · ');
         card.innerHTML = '<span class="spec-label">' + esc(label) + '</span>' +
           '<span class="spec-value">' + esc(gpu.name + countStr) + '</span>' +
           '<span class="spec-detail">' + esc(details) + '</span>';
@@ -50,11 +200,11 @@ async function loadSpecs() {
     if (specs.unified_memory) {
       const archCard = document.getElementById('memory-arch-card');
       archCard.style.display = '';
-      document.getElementById('memory-arch').textContent = 'Unified (CPU + GPU shared)';
+      document.getElementById('memory-arch').textContent = t('unified_memory');
     }
   } catch (e) {
     console.error('Failed to load specs:', e);
-    document.getElementById('cpu-name').textContent = 'Error loading specs';
+    document.getElementById('cpu-name').textContent = t('error_loading_specs');
   }
 }
 
@@ -219,12 +369,12 @@ async function pullModel(name) {
 function renderModels(fits) {
   const tbody = document.getElementById('models-body');
   if (!fits || fits.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="loading">No models found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="loading">' + t('no_models_found') + '</td></tr>';
     return;
   }
   tbody.innerHTML = fits.map((f, i) => `
     <tr class="model-row" data-index="${i}">
-      <td><strong>${esc(f.name)}</strong>${f.installed ? ' <span class="installed-dot" title="Installed">●</span>' : ''}</td>
+      <td><strong>${esc(f.name)}</strong>${f.installed ? ' <span class="installed-dot" title="' + t('installed') + '">●</span>' : ''}</td>
       <td>${esc(f.params_b.toFixed(1))}B</td>
       <td>${esc(f.quant)}</td>
       <td class="${fitClass(f.fit_level)}">${esc(f.fit_level)}</td>
@@ -267,7 +417,7 @@ async function loadModels() {
   } catch (e) {
     console.error('Failed to load models:', e);
     document.getElementById('models-body').innerHTML =
-      '<tr><td colspan="9" class="loading">Error loading models</td></tr>';
+      '<tr><td colspan="9" class="loading">' + t('error_loading_models') + '</td></tr>';
   }
 }
 
@@ -284,8 +434,13 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('search').addEventListener('input', applyFilters);
 document.getElementById('fit-filter').addEventListener('change', applyFilters);
 
+// Language toggle
+document.getElementById('lang-toggle').addEventListener('click', toggleLanguage);
+
 async function init() {
   ollamaAvailable = await invoke('is_ollama_available') || false;
+  // Initialize language
+  updateLanguage();
   loadSpecs();
   loadModels();
 }

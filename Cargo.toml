@@ -1,5 +1,5 @@
 [workspace]
-members = ["llmfit-core", "llmfit-tui", "llmfit-desktop"]
+members = ["llmfit-core", "llmfit-tui", "llmfit-desktop", "desktop-app/src-tauri"]
 default-members = ["llmfit-core", "llmfit-tui"]
 resolver = "3"
 

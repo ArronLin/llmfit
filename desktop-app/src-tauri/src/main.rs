@@ -3,46 +3,33 @@
 
 use std::process::{Child, Command};
 use std::sync::Mutex;
-use tauri::{Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem};
+use tauri::Manager;
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::menu::{Menu, MenuItem};
 
 struct BackendProcess(Mutex<Option<Child>>);
 
 fn main() {
-    let tray_menu = SystemTrayMenu::new()
-        .add_item(SystemTrayMenuItem::new("Show", "show"))
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(SystemTrayMenuItem::new("Exit", "exit"));
-
-    let system_tray = SystemTray::new().with_menu(tray_menu);
-
     tauri::Builder::default()
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app| {
             let app_handle = app.handle();
             
-            // Start backend server
-            start_backend(&app_handle);
+            // Create tray menu
+            let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let exit_item = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &exit_item])?;
             
-            Ok(())
-        })
-        .system_tray(system_tray)
-        .on_system_tray_event(|app, event| {
-            match event {
-                SystemTrayEvent::LeftClick {
-                    position: _,
-                    size: _,
-                    ..
-                } => {
-                    let window = app.get_window("main").unwrap();
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
-                }
-                SystemTrayEvent::MenuItemClick { id, .. } => {
-                    match id.as_str() {
+            // Create tray icon
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
                         "show" => {
-                            let window = app.get_window("main").unwrap();
-                            window.show().unwrap();
-                            window.set_focus().unwrap();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
                         "exit" => {
                             stop_backend(app);
@@ -50,18 +37,28 @@ fn main() {
                         }
                         _ => {}
                     }
-                }
-                _ => {}
-            }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::DoubleClick { .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            
+            // Start backend server
+            start_backend(&app_handle);
+            
+            Ok(())
         })
-        .on_window_event(|event| {
-            match event.event() {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    // Hide window instead of closing
-                    event.window().hide().unwrap();
-                    api.prevent_close();
-                }
-                _ => {}
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Hide window instead of closing
+                window.hide().unwrap();
+                api.prevent_close();
             }
         })
         .run(tauri::generate_context!())
@@ -69,32 +66,33 @@ fn main() {
 }
 
 fn start_backend(app: &tauri::AppHandle) {
-    let backend_path = app
-        .path_resolver()
-        .resolve_resource("backend/llmfit-backend.exe")
-        .expect("failed to resolve backend executable");
-
-    // Find available port
-    let port = portpicker::pick_unused_port().expect("no available port");
+    // Get the resource directory
+    let resource_dir = app.path()
+        .resource_dir()
+        .expect("failed to get resource dir");
     
-    // Set environment variable for port
-    std::env::set_var("LLMFIT_PORT", port.to_string());
+    let backend_path = resource_dir
+        .join("backend")
+        .join("llmfit-backend.exe");
+
+    println!("Starting backend from: {:?}", backend_path);
 
     let child = Command::new(backend_path)
         .arg("--port")
-        .arg(port.to_string())
+        .arg("8000")
         .spawn()
         .expect("failed to start backend");
 
     let state: tauri::State<BackendProcess> = app.state();
     *state.0.lock().unwrap() = Some(child);
 
-    println!("Backend started on port {}", port);
+    println!("Backend started on port 8000");
 }
 
 fn stop_backend(app: &tauri::AppHandle) {
     let state: tauri::State<BackendProcess> = app.state();
-    if let Some(mut child) = state.0.lock().unwrap().take() {
+    let mut child_option = state.0.lock().unwrap();
+    if let Some(mut child) = child_option.take() {
         let _ = child.kill();
         println!("Backend stopped");
     }

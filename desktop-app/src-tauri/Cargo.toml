@@ -1,5 +1,5 @@
 [package]
-name = "llmfit-desktop"
+name = "llmfit-desktop-app"
 version = "0.1.0"
 description = "LLMFit Desktop Application"
 authors = ["llmfit"]
@@ -9,14 +9,15 @@ edition = "2021"
 rust-version = "1.70"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = ["system-tray", "shell-open"] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 portpicker = "0.1"
 which = "5.0"
+tauri-plugin-shell = "2"
 
 [features]
 default = ["custom-protocol"]

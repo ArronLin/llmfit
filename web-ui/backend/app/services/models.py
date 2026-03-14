@@ -1,18 +1,34 @@
 import json
+import sys
+import os
 from pathlib import Path
 from typing import List
 
 from app.models.schemas import LlmModel
 
 
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent.parent
+
+
 def load_models_from_json() -> List[LlmModel]:
     try:
-        current_dir = Path(__file__).resolve().parent
-        data_path = current_dir.parent.parent / "data" / "hf_models.json"
-        if data_path.exists():
-            with open(data_path, "r", encoding="utf-8") as f:
-                models_data = json.load(f)
-            return [LlmModel(**model) for model in models_data]
+        base_path = get_base_path()
+        
+        # Try multiple possible locations for the data file
+        possible_paths = [
+            base_path / "data" / "hf_models.json",
+            base_path / "hf_models.json",
+            Path(__file__).resolve().parent.parent.parent / "data" / "hf_models.json",
+        ]
+        
+        for data_path in possible_paths:
+            if data_path.exists():
+                with open(data_path, "r", encoding="utf-8") as f:
+                    models_data = json.load(f)
+                return [LlmModel(**model) for model in models_data]
     except Exception:
         pass
     return get_fallback_models()

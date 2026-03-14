@@ -1,12 +1,69 @@
+# Rust build artifacts
 /target
-llmfit
-/docs
-llmfit-desktop/gen/schemas/*
+**/target/
+Cargo.lock
+
+# Build outputs
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+
+# Log files
+*.log
+build.log
+tauri-build.log
+
+# IDE files
+.trae/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Node.js
+node_modules/
+package-lock.json
+yarn.lock
+
+# Distribution and release files
+/dist/
+/final-dist/
+/test_extract/
+*.zip
+*.tar.gz
+*.tar
+
+# Generated files
+/gen/
+**/gen/schemas/
+
+# Data cache
 data/gguf_sources_cache.json
 
-# Trae IDE files
-.trae/
+# OS files
+.DS_Store
+Thumbs.db
 
-# Web UI dependencies and build
-web-ui/frontend/node_modules/
-web-ui/backend/__pycache__/
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Release artifacts (built by CI)
+llmfit-desktop-release/
+
+# docs (if generated)
+/docs
+
+# llmfit binary
+llmfit
