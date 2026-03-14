@@ -1,6 +1,10 @@
 [workspace]
-members = ["llmfit-core", "llmfit-tui", "llmfit-desktop", "desktop-app/src-tauri"]
-default-members = ["llmfit-core", "llmfit-tui"]
+members = [
+    "crates/llmfit-core",
+    "crates/llmfit-tui",
+    "crates/llmfit-desktop",
+]
+default-members = ["crates/llmfit-core", "crates/llmfit-tui"]
 resolver = "3"
 
 [workspace.package]
